@@ -16,7 +16,6 @@ use App\Core\ModuleManagement\Models\ModuleInstallation;
 use App\Core\ModuleManagement\Models\ModulePackage;
 use App\Core\ModuleManagement\Services\ModulePackageInstaller;
 use App\Core\ModuleManagement\Services\Release\ArtifactSignatureService;
-use App\Core\System\Services\Module\ModuleContractMetrics;
 use App\Core\System\Services\Module\ModuleRegistry;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
@@ -45,7 +44,6 @@ class FlowShopController extends Controller
     public function __construct(
         private readonly IntegrationService $integrationService,
         private readonly ModulePackageInstaller $modulePackageInstaller,
-        private readonly ModuleContractMetrics $moduleContractMetrics,
         private readonly FlowShopManagementServerGateway $flowShopManagementServerGateway,
         private readonly ArtifactSignatureService $artifactSignatureService,
     ) {}
@@ -737,6 +735,10 @@ class FlowShopController extends Controller
             throw new RuntimeException('Update post-check başarısız; rollback tamamlanamadı.');
         }
 
+        if ($action === 'update' && $rollbackTriggered) {
+            throw new RuntimeException(__('admin.marketplace_client.messages.module_update_rolled_back'));
+        }
+
         return [
             'family' => $resolvedFamily,
             'module_key' => $moduleKey,
@@ -756,9 +758,18 @@ class FlowShopController extends Controller
 
     private function postUpgradeHealthCheck(string $family, string $moduleKey): bool
     {
+        $keyCandidates = $this->moduleKeyCandidates($moduleKey);
+        if ($keyCandidates === []) {
+            return false;
+        }
+        $lowerCandidates = array_values(array_unique(array_map('mb_strtolower', $keyCandidates)));
+
         $installation = ModuleInstallation::query()
-            ->where('family', $family)
-            ->where('module_key', $moduleKey)
+            ->whereRaw('LOWER(family) = ?', [strtolower($family)])
+            ->where(function ($query) use ($keyCandidates, $lowerCandidates): void {
+                $query->whereIn('module_key', $keyCandidates)
+                    ->orWhereIn(\DB::raw('LOWER(module_key)'), $lowerCandidates);
+            })
             ->where('is_installed', true)
             ->where('is_active', true)
             ->first();
@@ -776,23 +787,50 @@ class FlowShopController extends Controller
             return false;
         }
 
-        if (! $this->hasModuleRoutesRegistered($family, $moduleKey)) {
+        /** Sadece bu modülün manifest sözleşmesi; tüm paneldeki contract_fail sayısını kullanma (yanlış rollback). */
+        if (! (bool) ($activeModule['contract_ok'] ?? false)) {
             return false;
         }
 
-        $metrics = $this->moduleContractMetrics->collect();
-
-        return (int) ($metrics['contract_fail_count'] ?? 0) === 0
-            && (int) ($metrics['dependency_missing_hard_count'] ?? 0) === 0
-            && (int) ($metrics['dependency_hard_cycle_count'] ?? 0) === 0;
+        return $this->hasModuleRoutesRegistered($family, $moduleKey, $activeModule);
     }
 
-    private function hasModuleRoutesRegistered(string $family, string $moduleKey): bool
+    /**
+     * Namespace, Str::studly('cms') => Cms hatası yerine module.json `namespace` / provider üzerinden çözülür.
+     *
+     * @param  array<string, mixed>  $activeModule
+     */
+    private function hasModuleRoutesRegistered(string $family, string $moduleKey, ?array $activeModule = null): bool
     {
-        $familyNamespace = Str::studly($family);
-        $moduleNamespace = Str::studly(preg_replace('/[^a-z0-9]+/i', ' ', $moduleKey) ?? $moduleKey);
-        $actionPrefix = "Modules\\{$familyNamespace}\\{$moduleNamespace}\\";
+        if (! is_array($activeModule)) {
+            $activeModule = collect(app(ModuleRegistry::class)->all())->first(function (array $m) use ($family, $moduleKey): bool {
+                return mb_strtolower((string) ($m['family'] ?? '')) === mb_strtolower($family)
+                    && mb_strtolower((string) ($m['key'] ?? '')) === mb_strtolower($moduleKey);
+            });
+        }
+        if (! is_array($activeModule)) {
+            return false;
+        }
 
+        $hasAdmin = (bool) ($activeModule['has_admin_routes'] ?? false);
+        $hasApi = (bool) ($activeModule['has_api_routes'] ?? false);
+        if (! $hasAdmin && ! $hasApi) {
+            return true;
+        }
+
+        $config = is_array($activeModule['config'] ?? null) ? $activeModule['config'] : [];
+        $namespace = is_string($config['namespace'] ?? null) ? trim((string) $config['namespace'], '\\') : '';
+        if ($namespace === '') {
+            $provider = (string) ($activeModule['provider'] ?? '');
+            if ($provider !== '' && preg_match('/^(.+)\\\\([^\\\\]+ServiceProvider)$/', $provider, $m)) {
+                $namespace = $m[1];
+            }
+        }
+        if ($namespace === '') {
+            return false;
+        }
+
+        $actionPrefix = $namespace.'\\';
         foreach (Route::getRoutes() as $route) {
             $action = (string) $route->getActionName();
             if ($action !== '' && str_contains($action, $actionPrefix)) {
@@ -1633,11 +1671,13 @@ class FlowShopController extends Controller
         return $modules->map(function (FlowShopManagementModule $module): object {
             $family = $this->normalizeFamily((string) ($module->family ?? ''));
             $moduleKeyFromSlug = $this->resolveModuleKeyFromFlowShopManagementModule($module);
-            $version = is_string($module->latest_version) && trim((string) $module->latest_version) !== ''
+            $managementLatest = is_string($module->latest_version) && trim((string) $module->latest_version) !== ''
                 ? trim((string) $module->latest_version)
-                : '1.0.0';
+                : null;
+            /** Çözümleyici için ipucu: FlowShop yönetimindeki sürüm; yoksa güvenli varsayılan */
+            $resolveHintVersion = $managementLatest ?? '1.0.0';
 
-            $package = $this->resolveModulePackageForInstall($family, $moduleKeyFromSlug, $version);
+            $package = $this->resolveModulePackageForInstall($family, $moduleKeyFromSlug, $resolveHintVersion);
             $moduleKey = $package instanceof ModulePackage
                 ? (string) $package->module_key
                 : $moduleKeyFromSlug;
@@ -1652,16 +1692,23 @@ class FlowShopController extends Controller
             $metadata['publisher'] = is_string($metadata['publisher'] ?? null) && trim((string) $metadata['publisher']) !== ''
                 ? $metadata['publisher']
                 : 'Bikare';
+            $resolvedPackageVersion = $package instanceof ModulePackage
+                ? trim((string) ($package->package_version ?? ''))
+                : '';
+            /**
+             * Katalogda gösterilecek "güncel" sürüm: FlowShop yönetim kaydı (latest_version) öncelikli.
+             * module_packages satırı bazen henüz yeni sürüm için yoktur; çözümleyici eski pakete düşer
+             * ve package_version 1.0.2 kalır — UI yanlış olur.
+             */
+            $advertisedVersion = $managementLatest ?? ($resolvedPackageVersion !== '' ? $resolvedPackageVersion : '1.0.0');
             $hasUpdate = $installedVersion !== null
-                && $this->isNewerVersion($version, $installedVersion);
+                && $this->isNewerVersion($advertisedVersion, $installedVersion);
             $releaseNotes = $this->resolveCatalogReleaseNotes($metadata);
 
             return (object) [
                 'family' => $family,
                 'module_key' => $moduleKey,
-                'package_version' => $package instanceof ModulePackage
-                    ? (string) ($package->package_version ?? $version)
-                    : $version,
+                'package_version' => $advertisedVersion,
                 'install_status' => $installStatus,
                 'installed_version' => $installedVersion,
                 'has_update' => $hasUpdate,
@@ -1716,7 +1763,7 @@ class FlowShopController extends Controller
         $keyCandidates = $this->moduleKeyCandidates($moduleKey);
         $lowerCandidates = array_values(array_unique(array_map('mb_strtolower', $keyCandidates)));
         $installed = ModuleInstallation::query()
-            ->where('family', $family)
+            ->whereRaw('LOWER(family) = ?', [strtolower($family)])
             ->where(function ($query) use ($keyCandidates, $lowerCandidates): void {
                 $query->whereIn('module_key', $keyCandidates)
                     ->orWhereIn(\DB::raw('LOWER(module_key)'), $lowerCandidates);
@@ -1760,7 +1807,7 @@ class FlowShopController extends Controller
         $lowerCandidates = array_values(array_unique(array_map('mb_strtolower', $keyCandidates)));
 
         $installation = ModuleInstallation::query()
-            ->where('family', $family)
+            ->whereRaw('LOWER(family) = ?', [strtolower($family)])
             ->where(function ($query) use ($keyCandidates, $lowerCandidates): void {
                 $query->whereIn('module_key', $keyCandidates)
                     ->orWhereIn(\DB::raw('LOWER(module_key)'), $lowerCandidates);

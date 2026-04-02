@@ -61,12 +61,40 @@
                     @else
                         <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5 lg:gap-7.5">
                             @foreach ($catalogModules as $module)
-                                @php($meta = is_array($module->metadata) ? $module->metadata : [])
-                                @php($name = is_array($meta['name'] ?? null) ? ($meta['name'][app()->getLocale()] ?? $meta['name']['tr'] ?? $meta['name']['en'] ?? $module->module_key) : (is_string($meta['name'] ?? null) ? $meta['name'] : $module->module_key))
-                                @php($publisher = is_string($meta['publisher'] ?? null) && trim($meta['publisher']) !== '' ? trim($meta['publisher']) : 'Bikare')
-                                @php($statusLabel = __('admin.marketplace_client.status.'.$module->install_status))
-                                @php($hasUpdateCard = $module->install_status === 'installed' && ($module->has_update ?? false))
-                                @php($moduleReleaseNotes = is_string($module->release_notes ?? null) ? $module->release_notes : null)
+                                @php
+                                    $meta = is_array($module->metadata) ? $module->metadata : [];
+                                    $name = is_array($meta['name'] ?? null)
+                                        ? ($meta['name'][app()->getLocale()] ?? $meta['name']['tr'] ?? $meta['name']['en'] ?? $module->module_key)
+                                        : (is_string($meta['name'] ?? null) ? $meta['name'] : $module->module_key);
+                                    $publisher = is_string($meta['publisher'] ?? null) && trim($meta['publisher']) !== ''
+                                        ? trim($meta['publisher'])
+                                        : 'Bikare';
+                                    $statusLabel = __('admin.marketplace_client.status.'.$module->install_status);
+                                    $hasUpdateCard = $module->install_status === 'installed' && ($module->has_update ?? false);
+                                    $moduleReleaseNotes = is_string($module->release_notes ?? null) ? $module->release_notes : null;
+                                    $catalogV = $module->package_version ?? '-';
+                                    $installedV = $module->installed_version ?? null;
+                                    if ($module->install_status === 'installed' && $hasUpdateCard) {
+                                        $catalogVersionInfo = __('admin.marketplace_client.catalog_version_info_update', [
+                                            'installed' => $installedV ?? '-',
+                                            'latest' => $catalogV,
+                                        ]);
+                                    } elseif ($module->install_status === 'installed') {
+                                        $catalogVersionInfo = __('admin.marketplace_client.catalog_version_info_installed', [
+                                            'version' => $installedV ?? $catalogV,
+                                        ]);
+                                    } else {
+                                        $catalogVersionInfo = __('admin.marketplace_client.catalog_version_info_catalog', [
+                                            'version' => $catalogV,
+                                        ]);
+                                    }
+                                    $pkgVerRaw = (string) ($module->package_version ?? '');
+                                    $wizardTargetVersion = $module->install_status === 'installed'
+                                        ? (is_string($installedV ?? null) && trim((string) $installedV) !== ''
+                                            ? trim((string) $installedV)
+                                            : $pkgVerRaw)
+                                        : $pkgVerRaw;
+                                @endphp
                                 <div class="kt-card flowshop-catalog-card"
                                      data-has-update="{{ $hasUpdateCard ? '1' : '0' }}">
                                     <div class="kt-card-content p-5 lg:p-7.5">
@@ -81,7 +109,7 @@
                                         <div class="flex flex-col gap-1 lg:gap-2.5">
                                             <div class="text-base font-semibold text-mono">{{ $name }}</div>
                                             <span class="text-sm text-secondary-foreground">
-                                                {{ __('admin.marketplace_client.catalog_module_meta', ['family' => strtoupper((string) ($module->family ?? '-')), 'publisher' => $publisher, 'version' => $module->package_version ?? '-']) }}
+                                                {{ __('admin.marketplace_client.catalog_module_meta', ['family' => strtoupper((string) ($module->family ?? '-')), 'publisher' => $publisher, 'version_info' => $catalogVersionInfo]) }}
                                             </span>
                                         </div>
                                     </div>
@@ -106,7 +134,7 @@
                                                     data-action="{{ $module->install_status === 'installed' ? 'reinstall' : 'install' }}"
                                                     data-family="{{ $module->family }}"
                                                     data-module-key="{{ $module->module_key }}"
-                                                    data-version="{{ $module->package_version }}"
+                                                    data-version="{{ $wizardTargetVersion }}"
                                                     data-module-name="{{ $name }}"
                                                     data-installed-version="{{ $module->installed_version ?? '' }}"
                                                     data-release-notes="{{ $moduleReleaseNotes !== null ? e($moduleReleaseNotes) : '' }}">
@@ -433,7 +461,7 @@
             document.getElementById('wizard-module-family').textContent = String(family).toUpperCase();
             document.getElementById('wizard-module-version').textContent = installedVersion && action === 'update'
                 ? `${installedVersion} -> ${version}`
-                : version;
+                : (action === 'reinstall' && installedVersion ? installedVersion : version);
             document.getElementById('wizard-module-action').textContent = actionTextMap[action] || action;
             document.getElementById('wizard-module-target').textContent = String(family).toLowerCase() === 'core'
                 ? `app/Core/${moduleKey}`
