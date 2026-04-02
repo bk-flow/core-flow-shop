@@ -1,0 +1,90 @@
+{
+  "$schema": "https://flow.bikare.net/schemas/module.schema.v1.json",
+  "schema_version": "1.0",
+  "key": "FlowShop",
+  "slug": "flow-shop",
+  "name": {
+    "tr": "Flow Shop",
+    "en": "Flow Shop"
+  },
+  "family": "core",
+  "description": {
+    "tr": "Yayınlanan modül/entegrasyon paketlerinin senkronizasyon, indirme ve kurulum akışını yürütür.",
+    "en": "Handles sync, download, and install flows for published module/integration packages."
+  },
+  "version": "1.0.0",
+  "type": "official",
+  "provider": "App\\Core\\FlowShop\\FlowShopServiceProvider",
+  "namespace": "App\\Core\\FlowShop",
+  "base_path": "app/Core/FlowShop",
+  "core": true,
+  "enabled": true,
+  "active_by_default": true,
+  "producer": "Bikare",
+  "repository": {
+    "provider": "github",
+    "owner": "bk-flow",
+    "name": "core-flow-shop",
+    "default_branch": "main",
+    "url": "https://github.com/bk-flow/core-flow-shop"
+  },
+  "release": {
+    "channel": "stable",
+    "artifact_strategy": "artifact_download",
+    "artifact_name_pattern": "core-flow-shop-{version}.zip"
+  },
+  "features": {
+    "has_admin_routes": true,
+    "has_api_routes": true,
+    "has_views": true,
+    "has_lang": true,
+    "has_migrations": false,
+    "has_menu": true,
+    "has_web_routes": false,
+    "has_console_routes": false,
+    "has_seeders": false,
+    "has_assets": false
+  },
+  "menu": {
+    "enabled": true,
+    "group": "settings",
+    "order": 87
+  },
+  "dependencies": {
+    "modules": [
+      {
+        "id": "master:FlowShopManagement",
+        "type": "hard",
+        "constraint": "^1.0"
+      }
+    ],
+    "php_extensions": [],
+    "composer": []
+  },
+  "installation": {
+    "requires_migration": false,
+    "requires_seeding": false,
+    "requires_cache_clear": true,
+    "requires_config_publish": false
+  },
+  "update": {
+    "rollback_supported": true,
+    "breaking_change": false
+  },
+  "compatibility": {
+    "php": "^8.2",
+    "laravel": "^13.0",
+    "flow_core": "^1.0"
+  },
+  "paths": {
+    "admin_routes": null,
+    "api_routes": null,
+    "web_routes": null,
+    "console_routes": null,
+    "views": "resources/views",
+    "lang": "resources/lang",
+    "migrations": null,
+    "seeders": null,
+    "assets": null
+  }
+}
