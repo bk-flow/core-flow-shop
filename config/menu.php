@@ -1,12 +1,9 @@
 <?php
 
 return [
-    [
-        'placement' => 'group_children',
-        'group' => 'settings',
-        'item' => [
+    'settings' => [
+        'flow_shop_marketplace' => [
             'title' => 'admin.marketplace_client.menu.title',
-            'icon' => null,
             'route' => 'cms.admin.flow-shop.published-modules',
             'permission' => 'marketplace_client_read',
             'active_routes' => [
