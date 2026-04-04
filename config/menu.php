@@ -3,6 +3,7 @@
 return [
     'settings' => [
         'flow_shop_marketplace' => [
+            'sort' => 80,
             'title' => 'admin.marketplace_client.menu.title',
             'route' => 'cms.admin.flow-shop.published-modules',
             'permission' => 'marketplace_client_read',
